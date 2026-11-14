@@ -26,6 +26,7 @@ String videoDecoderVisibilityGuardScript() => r'''
 
   function raf(){
     lastRaf = Date.now();
+    try { window.__selkiesRafPulse = lastRaf; } catch (e) {}
     window.requestAnimationFrame(raf);
   }
   window.requestAnimationFrame(raf);

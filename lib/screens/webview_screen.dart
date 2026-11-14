@@ -4,7 +4,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
-    show Clipboard, ClipboardData, rootBundle;
+    show Clipboard, ClipboardData, MethodChannel, rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../models/connection.dart';
@@ -49,6 +49,7 @@ class _WebViewScreenState extends State<WebViewScreen>
   String? _lastAutoImageSig;
   Timer? _decoderSuspendTimer;
   bool _decoderSuspended = false;
+  bool _streamKickBusy = false;
   Timer? _linkProbeTimer;
   bool _linkProbeDone = false;
   static bool _clipboardHintShown = false;
@@ -135,16 +136,49 @@ class _WebViewScreenState extends State<WebViewScreen>
     });
   }
 
-  /// cmd+tab 切回时唤醒 Selkies 视频管线（synthetic visibilitychange）。
+  /// WKWebView 原生抖动通道(冻结时强制渲染事务)。
+  static const MethodChannel _wkNudgeChannel =
+      MethodChannel('wechat_selkies/wkwebview_nudge');
+
+  /// cmd+tab 切回时唤醒 Selkies 视频管线。
+  ///
+  /// 实测实锤(macOS 统一日志级复现):app 失焦后 WKWebView 的**原生合成层**
+  /// 可能停止向屏幕提交新帧,重聚焦也不恢复——此时 JS 全活(rAF 8ms)、
+  /// WS 帧照涌(1ms)、解码正常,唯独画面定格;任何 JS 层探针都判"健康"。
+  /// 唯一有效手段 = 原生 frame 抖动强制新的 CA 渲染事务。
+  /// 因此顺序固定:**先无条件原生 nudge,再 JS kick 兜页面状态**,
+  /// 探针只做记录不再当门控。
   Future<void> _kickStreamAwake() async {
     final c = _controller;
-    if (c == null || !mounted) return;
+    if (c == null || !mounted || _streamKickBusy) return;
+    _streamKickBusy = true;
+    try {
+      await _kickStreamAwakeInner(c);
+    } finally {
+      _streamKickBusy = false;
+    }
+  }
+
+  Future<void> _kickStreamAwakeInner(InAppWebViewController c) async {
+    // 1) 原生合成层唤醒(1px frame 抖动,不可见,必做)
+    try {
+      await _wkNudgeChannel.invokeMethod<void>('nudge');
+      debugPrint('[stream] native nudge ok');
+    } catch (e) {
+      debugPrint('[stream] native nudge failed: $e');
+    }
+    // 2) JS 层 kick:hidden 翻转 + visibilitychange + START_VIDEO + guard 循环
     try {
       final r = await c.evaluateJavascript(source: buildStreamAwakeScript());
       debugPrint('[stream] awake kick: $r');
     } catch (e) {
       debugPrint('[stream] awake kick failed: $e');
     }
+    // 3) 记录性探针(不门控)
+    try {
+      final raw = await c.evaluateJavascript(source: buildStreamPulseScript());
+      debugPrint('[stream] pulse: $raw');
+    } catch (_) {}
   }
 
   Future<void> _setDecoderActive(bool active) async {

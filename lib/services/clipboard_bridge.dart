@@ -192,6 +192,7 @@ String clipboardSocketHookScript() => '''
       if (String(url).indexOf('websockets') !== -1) {
         window.__selkiesSocket = ws;
         ws.addEventListener('message', function(ev) {
+          try { window.__selkiesWsPulse = Date.now(); } catch (e) {}
           onServerClipboard(ev.data);
         });
         ws.addEventListener('close', function() {
@@ -643,17 +644,18 @@ Future<RemoteClipboardSnapshot?> pullRemoteClipboard({
   }
 }
 
-/// 唤醒卡住的 Selkies 视频管线（cmd+tab 切回后画布冻结、需手动刷新的场景）。
+/// 唤醒卡住的 Selkies 视频管线(cmd+tab 切回后画布冻结、需手动刷新的场景)。
 ///
-/// 页面在 `visibilitychange` 里管视频:hidden → `STOP_VIDEO` + 清画布;
-/// visible → 重初始化 VideoDecoder + `START_VIDEO`。WKWebView 的 occlusion
-/// 状态常不随 app 重聚焦更新:`document.hidden` 卡在 true → 永不发
-/// `START_VIDEO`;或 hidden 虽为 false 但解码/渲染循环已停摆。两种情况
-/// 派发一次 synthetic `visibilitychange` 都会走页面的 visible 分支完成
-/// 恢复(等于浏览器里切一次标签页,走页面自带恢复路径)。
+/// 已实锤的连环坑:WKWebView 重聚焦时 `document.hidden` 常卡 true →
+/// ①页面 visible 分支不跑(不发 START_VIDEO);②decoder guard 的
+/// `isBackground()` 恒真 → `decode()` 全部早退,帧到了也不解码;③隐藏期间
+/// 被 guard close 掉的解码器无人重建。本脚本一次踢四层:翻转 hidden、
+/// 派发 visibilitychange(页面重初始化解码器)、补发 START_VIDEO、
+/// guard 关→开循环(清 forcedBackground 并触发解码器重建)。
 String buildStreamAwakeScript() => '''
 (function(){
   try {
+    var out = {hidden: document.hidden};
     if (document.hidden) {
       try {
         Object.defineProperty(Document.prototype, 'hidden',
@@ -663,10 +665,35 @@ String buildStreamAwakeScript() => '''
       } catch (e) {}
     }
     document.dispatchEvent(new Event('visibilitychange'));
-    return 'kicked';
+    out.event = 1;
+    var ws = window.__selkiesSocket;
+    out.ws = ws ? ws.readyState : null;
+    if (ws && ws.readyState === 1) {
+      ws.send('START_VIDEO');
+      out.start = 1;
+    }
+    try {
+      if (window.__selkiesDecoderGuardSetActive) {
+        window.__selkiesDecoderGuardSetActive(false);
+        window.__selkiesDecoderGuardSetActive(true);
+        out.guard = 1;
+      }
+    } catch (e) {}
+    return JSON.stringify(out);
   } catch (e) { return 'err:' + e; }
 })()
 ''';
+
+/// 读取流脉搏:返回 JSON `{raf:<ms>, pulse:<ms>}` ——
+/// raf = 距上一次 requestAnimationFrame 回调(WebKit 合成层活着与否的判据,
+/// 页面被原生层判 hidden 时 rAF 按规范暂停);pulse = 距上一条 WS 消息
+/// (视频帧数据是否还在到)。
+String buildStreamPulseScript() =>
+    '(function(){try{'
+    'var r=window.__selkiesRafPulse?Date.now()-window.__selkiesRafPulse:-1;'
+    'var p=window.__selkiesWsPulse?Date.now()-window.__selkiesWsPulse:-1;'
+    'return JSON.stringify({raf:r,pulse:p});'
+    '}catch(e){return "{\\"raf\\":-1,\\"pulse\\":-1}";}})()';
 
 class ClipboardBridgeException implements Exception {
   final String message;
