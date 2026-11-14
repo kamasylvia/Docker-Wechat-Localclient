@@ -174,11 +174,31 @@ class _WebViewScreenState extends State<WebViewScreen>
     } catch (e) {
       debugPrint('[stream] awake kick failed: $e');
     }
-    // 3) 记录性探针(不门控)
+    // 3) 冻结探测:WS 帧在涌(合成层有数据)但屏幕像素 1.5s 不变 →
+    //    合成层死锁实锤 → reload 保底。idle 屏幕无帧(damage-only)不会
+    //    误触发。
     try {
       final raw = await c.evaluateJavascript(source: buildStreamPulseScript());
       debugPrint('[stream] pulse: $raw');
-    } catch (_) {}
+      final txt = raw is Map ? jsonEncode(raw) : (raw?.toString() ?? '');
+      final wsAge =
+          int.tryParse(RegExp(r'"pulse":(-?\d+)').firstMatch(txt)?.group(1) ?? '-1') ?? -1;
+      if (wsAge >= 0 && wsAge < 800) {
+        // 帧在流动:采两次屏幕哈希
+        final h1 = await _wkNudgeChannel.invokeMethod<String>('sampleWindow');
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        if (!mounted) return;
+        final h2 = await _wkNudgeChannel.invokeMethod<String>('sampleWindow');
+        debugPrint('[stream] screen $h1 vs $h2');
+        if (h1 != null && h1 == h2) {
+          _showSnack('画面冻结(帧在流但屏幕静止),自动刷新恢复…');
+          await c.reload();
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('[stream] freeze probe failed: $e');
+    }
   }
 
   Future<void> _setDecoderActive(bool active) async {

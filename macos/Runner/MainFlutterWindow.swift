@@ -18,6 +18,35 @@ class MainFlutterWindow: NSWindow {
       name: "wechat_selkies/wkwebview_nudge",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
     nudgeChannel.setMethodCallHandler { call, result in
+      if call.method == "sampleWindow" {
+        // 捕获本窗口当前**屏幕合成结果**并返回像素哈希;两次采样相同
+        // 且 WS 帧在流动 = 合成层死锁的铁证(JS 探针看不见这个状态)。
+        let wid = CGWindowID(self.windowNumber)
+        guard let shot = CGWindowListCreateImage(
+                .null, .optionOnScreenBelowWindow, wid,
+                [.bestResolution, .boundsIgnoreFraming]) else {
+          result(FlutterError(code: "capture_failed", message: nil, details: nil))
+          return
+        }
+        let rep = NSBitmapImageRep(cgImage: shot)
+        var hash: UInt64 = 0xcbf29ce484222325
+        let w = rep.pixelsWide, h = rep.pixelsHigh
+        if let data = rep.bitmapData {
+          for y in stride(from: 0, to: h, by: max(1, h / 48)) {
+            let row = data + y * rep.bytesPerRow
+            for x in stride(from: 0, to: w, by: max(1, w / 48)) {
+              let px = row + x * 4
+              for b in 0..<4 {
+                hash ^= UInt64(px[b])
+                hash = hash &* 0x100000001b3
+              }
+            }
+          }
+        }
+        result(String(hash))
+        return
+      }
+
       guard call.method == "nudge" else {
         result(FlutterMethodNotImplemented)
         return
@@ -49,22 +78,13 @@ class MainFlutterWindow: NSWindow {
         result(FlutterError(code: "no_webview", message: "WKWebView not found", details: nil))
         return
       }
-      // 实测定案:view 级/窗口缩放级抖动都唤不醒深度冻结的合成层;
-      // 唯一有效 = 整窗 orderOut 再 makeKeyAndOrderFront(把窗口短暂
-      // 摘出屏幕,强制 WindowServer 重建该窗口的全部图层)。
-      if let win = web.window {
-        win.orderOut(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-          win.makeKeyAndOrderFront(nil)
-        }
-      } else {
-        let origFrame = web.frame
-        var nudgedFrame = origFrame
-        nudgedFrame.size.height += 1
-        web.frame = nudgedFrame
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-          web.frame = origFrame
-        }
+      // 实测定案:能唤醒冻结合成层的是 **app 级 hide/unhide**(手动
+      // System Events visible 开关验证过);窗口级 orderOut 在部分遮挡
+      // 场景不足。顺序:hide → 80ms → unhide + 前台。
+      NSApp.hide(nil)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
       }
       result(nil)
     }
