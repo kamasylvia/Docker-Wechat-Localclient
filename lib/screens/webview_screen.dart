@@ -140,14 +140,12 @@ class _WebViewScreenState extends State<WebViewScreen>
   static const MethodChannel _wkNudgeChannel =
       MethodChannel('wechat_selkies/wkwebview_nudge');
 
-  /// cmd+tab 切回时唤醒 Selkies 视频管线。
+  /// cmd+tab 切回时唤醒 Selkies 视频管线(探测驱动,健康时不打扰)。
   ///
-  /// 实测实锤(macOS 统一日志级复现):app 失焦后 WKWebView 的**原生合成层**
-  /// 可能停止向屏幕提交新帧,重聚焦也不恢复——此时 JS 全活(rAF 8ms)、
-  /// WS 帧照涌(1ms)、解码正常,唯独画面定格;任何 JS 层探针都判"健康"。
-  /// 唯一有效手段 = 原生 frame 抖动强制新的 CA 渲染事务。
-  /// 因此顺序固定:**先无条件原生 nudge,再 JS kick 兜页面状态**,
-  /// 探针只做记录不再当门控。
+  /// 顺序:JS kick(零成本)→ 探测「WS 帧在涌 + web 区像素 1.5s 不变」
+  /// = 合成层死锁 → 只有此时才 nudge(app 级 hide/unhide,有闪烁且
+  /// unhide 竞态会把 app 卡隐藏,不能无脑跑)→ 复测仍死 → reload 保底。
+  /// idle 屏 damage-only 无帧,探测天然免疫误判。
   Future<void> _kickStreamAwake() async {
     final c = _controller;
     if (c == null || !mounted || _streamKickBusy) return;
@@ -159,45 +157,72 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
-  Future<void> _kickStreamAwakeInner(InAppWebViewController c) async {
-    // 1) 原生合成层唤醒(1px frame 抖动,不可见,必做)
+  Future<String> _screenHash() async {
     try {
-      await _wkNudgeChannel.invokeMethod<void>('nudge');
-      debugPrint('[stream] native nudge ok');
-    } catch (e) {
-      debugPrint('[stream] native nudge failed: $e');
+      return await _wkNudgeChannel.invokeMethod<String>('sampleWindow') ?? '';
+    } catch (_) {
+      return '';
     }
-    // 2) JS 层 kick:hidden 翻转 + visibilitychange + START_VIDEO + guard 循环
+  }
+
+  Future<int> _wsPulseAgeMs(InAppWebViewController c) async {
+    try {
+      final raw = await c.evaluateJavascript(source: buildStreamPulseScript());
+      final txt = raw is Map ? jsonEncode(raw) : (raw?.toString() ?? '');
+      return int.tryParse(
+              RegExp(r'"pulse":(-?\d+)').firstMatch(txt)?.group(1) ?? '-1') ??
+          -1;
+    } catch (_) {
+      return -1;
+    }
+  }
+
+  Future<void> _kickStreamAwakeInner(InAppWebViewController c) async {
+    // 1) JS kick:hidden 翻转 + visibilitychange + START_VIDEO + guard 循环
     try {
       final r = await c.evaluateJavascript(source: buildStreamAwakeScript());
       debugPrint('[stream] awake kick: $r');
     } catch (e) {
       debugPrint('[stream] awake kick failed: $e');
     }
-    // 3) 冻结探测:WS 帧在涌(合成层有数据)但屏幕像素 1.5s 不变 →
-    //    合成层死锁实锤 → reload 保底。idle 屏幕无帧(damage-only)不会
-    //    误触发。
+    // 2) 探测:先等 snackbar/舞步消停,再看数据与像素
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    if (!mounted) return;
+    final wsAge = await _wsPulseAgeMs(c);
+    debugPrint('[stream] wsPulse=${wsAge}ms');
+    if (wsAge < 0 || wsAge >= 800) return; // 无帧:空闲或数据停,kick 已覆盖
+
+    final h1 = await _screenHash();
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    if (!mounted) return;
+    final h2 = await _screenHash();
+    debugPrint('[stream] screen $h1 vs $h2');
+    if (h1.isEmpty || h1 != h2) return; // 像素在动 = 活
+
+    // 3) 冻结实锤 → nudge(唯一有副作用的一步)
+    debugPrint('[stream] FROZEN (frames flowing, pixels static) -> nudge');
     try {
-      final raw = await c.evaluateJavascript(source: buildStreamPulseScript());
-      debugPrint('[stream] pulse: $raw');
-      final txt = raw is Map ? jsonEncode(raw) : (raw?.toString() ?? '');
-      final wsAge =
-          int.tryParse(RegExp(r'"pulse":(-?\d+)').firstMatch(txt)?.group(1) ?? '-1') ?? -1;
-      if (wsAge >= 0 && wsAge < 800) {
-        // 帧在流动:采两次屏幕哈希
-        final h1 = await _wkNudgeChannel.invokeMethod<String>('sampleWindow');
-        await Future<void>.delayed(const Duration(milliseconds: 1500));
-        if (!mounted) return;
-        final h2 = await _wkNudgeChannel.invokeMethod<String>('sampleWindow');
-        debugPrint('[stream] screen $h1 vs $h2');
-        if (h1 != null && h1 == h2) {
-          _showSnack('画面冻结(帧在流但屏幕静止),自动刷新恢复…');
-          await c.reload();
-          return;
-        }
-      }
+      await _wkNudgeChannel.invokeMethod<void>('nudge');
     } catch (e) {
-      debugPrint('[stream] freeze probe failed: $e');
+      debugPrint('[stream] nudge failed: $e');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 1600));
+    if (!mounted) return;
+    final h3 = await _screenHash();
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    if (!mounted) return;
+    final h4 = await _screenHash();
+    debugPrint('[stream] post-nudge $h3 vs $h4');
+    if (h3.isNotEmpty && h3 != h4) {
+      _showSnack('画面已恢复');
+      return;
+    }
+    // 4) 保底 reload
+    _showSnack('画面冻结,自动刷新恢复…');
+    try {
+      await c.reload();
+    } catch (e) {
+      debugPrint('[stream] reload failed: $e');
     }
   }
 
