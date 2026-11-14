@@ -30,6 +30,8 @@
 - **诊断优先于推断**:剪贴板图片排查绕了三轮(猜 gating / 猜大小 / 猜协议),最后靠 `docker logs` 一行 `Invalid cbs message` 定位。**对策**:协议类问题第一时间抓服务端日志与容器内实际源码。
 
 ## 2026-11-14(续:cmd+tab 冻屏终局)
+- **唤醒强度分级(实测)**:窗口级 orderOut < app 级 `NSApp.hide/unhide`——手动验证有效的是 app 级,降级实现成窗口级就不够(用户实测打回)。
+- **合成层死锁的可靠判据**=「WS 帧在涌 + 屏幕像素哈希 1.5s 不变」(原生 `CGWindowListCreateImage` 采本窗口);idle 屏 damage-only 无帧,天然免疫误判。命中即自动 reload 兜底。
 
 - **macOS WKWebView 合成层死锁(JS 全不可见)**:app 失活后 drawing area 停止向屏幕提交,重激活不恢复;rAF 照跑、WS 帧照涌、解码正常,唯独画面定格。**对策**:resume 时经 MethodChannel 调 Swift `win.orderOut(nil)` + 80ms 后 `makeKeyAndOrderFront`(整窗摘出屏幕再放回);view 级/窗口 resize 级抖动均无效(实测)。WKWebView 查找用 `isKindOfClass`(插件可能子类化,按类名字符串匹配会漏)。
 - **JS 探针判不了原生冻结**:一切页面内指标(rAF/WS 脉搏/decoder 状态)全绿而屏幕已死——探针只能当记录,不能当恢复门控;原生问题必须原生手段。
