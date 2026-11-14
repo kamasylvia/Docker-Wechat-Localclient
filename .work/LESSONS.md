@@ -29,6 +29,13 @@
 - **版本 bump 要用精确断言**:`sed s/5.5.1+1/5.6.0+1/` 在文件已是 5.5.2+1 时静默无操作,导致 tag 版本与产物不符、装的还是旧构建。**对策**:bump 后 `grep '^version'` 确认,并用 `python` 断言原值存在。
 - **诊断优先于推断**:剪贴板图片排查绕了三轮(猜 gating / 猜大小 / 猜协议),最后靠 `docker logs` 一行 `Invalid cbs message` 定位。**对策**:协议类问题第一时间抓服务端日志与容器内实际源码。
 
+## 2026-11-14(续:cmd+tab 冻屏终局)
+
+- **macOS WKWebView 合成层死锁(JS 全不可见)**:app 失活后 drawing area 停止向屏幕提交,重激活不恢复;rAF 照跑、WS 帧照涌、解码正常,唯独画面定格。**对策**:resume 时经 MethodChannel 调 Swift `win.orderOut(nil)` + 80ms 后 `makeKeyAndOrderFront`(整窗摘出屏幕再放回);view 级/窗口 resize 级抖动均无效(实测)。WKWebView 查找用 `isKindOfClass`(插件可能子类化,按类名字符串匹配会漏)。
+- **JS 探针判不了原生冻结**:一切页面内指标(rAF/WS 脉搏/decoder 状态)全绿而屏幕已死——探针只能当记录,不能当恢复门控;原生问题必须原生手段。
+- **判活必须主动制造变化**:idle 屏幕双截图 md5 相同≠冻结(damage-only 流静止不发帧);点已打开的会话无变化也≠冻结。要换目标点、看响应。
+- **无人值守复现三件套**:Vision 框架 OCR(swift 脚本定位 UI)+ CGEvent 驱动(点击/cmd+tab)+ 终端启动抓 stdout 日志。比用户手测快一个量级,且证据全落盘。
+
 ## 2026-11-14
 
 - **WKWebView 重聚焦 occlusion 不回传 → 页面视频管线冻死**:页面靠 `visibilitychange` 管流(hidden→STOP_VIDEO,visible→START_VIDEO),macOS app cmd+tab 回来时 `document.hidden` 常卡 true,永停流。**对策**:`AppLifecycleState.resumed` 注入 synthetic `visibilitychange`(hidden 卡 true 先覆写 `Document.prototype` 的 getter),让页面走自带 visible 分支自愈;健康时多派发一次=其设计路径,无害。
