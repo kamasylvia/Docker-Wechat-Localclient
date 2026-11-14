@@ -8,7 +8,7 @@
 - [ ] **服务端版本观察(2026-11-09 盘点:无需更新)**:wechat-selkies 最新 = v0.0.17(2026-10-08,ghcr 数字 tag 封顶、releases 最新),容器已是最新;基镜像 linuxserver/baseimage-selkies:ubuntunoble = Python 老栈,上游 selkies-gstreamer 的 Rust 重写(crates/selkies)尚未被 wechat-selkies 跟进 → Portainer update stack 只会原地重拉同一镜像。触发条件 = 作者 rebase 新基镜像发新版(已提 issue #130);届时剪贴板协议不同,客户端接管方案需适配
 - [ ] 推送图片 >16 MB:走服务端分片上传 verbs(`cbs/cbd/cbe`,协议已核实未实现)——有实际大图需求再做
 - [ ] filebrowser 上游已归档(2026-09-01 起 no fix):出现可靠社区续作镜像时评估替换(卷结构兼容,只换 image)
-- [ ] 思源笔记「客户端装法」命令随每次发版更新资产链接(当前 v5.6.15:cmd+tab 冻屏终修=app 级 hide nudge+屏幕冻结探测+自动 reload;装法命令待同步)
+- [ ] 思源笔记「客户端装法」命令随每次发版更新资产链接(当前 v5.6.17:cmd+tab 冻屏=分级探测驱动(健康零闪烁,冻结才 nudge,reload 兜底);装法命令待同步)
 - [x] v5.5.0/v5.5.1 FileBrowser 地址:表单填写→按钮显隐(配置+可达探测)→跳转,本地实测通过
 - [x] 2026-11-13「Waiting for stream...」永久黑屏:根因 = WKWebView localStorage 107 个残留键污染建流参数(真浏览器同 URL 正常)。已清空恢复;产品化对策=连接页「重置页面状态」按钮(v5.6.8 已发版),本机已装 5.6.8
 - [x] 2026-11-13 反复黑屏第二类根因 = **链路大包丢包**(小包 ping 7ms/0%,1400B 包丢 0~37.5%,QNAP 全服务吞吐 0~70KB/s)。客户端链路吞吐提示已发版 v5.6.9 并本机安装。**待办**:确认该链路拥塞是否自愈/是否为运营商出口问题;临时缓解=手机热点或降帧率质量

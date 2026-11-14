@@ -30,6 +30,9 @@
 - **诊断优先于推断**:剪贴板图片排查绕了三轮(猜 gating / 猜大小 / 猜协议),最后靠 `docker logs` 一行 `Invalid cbs message` 定位。**对策**:协议类问题第一时间抓服务端日志与容器内实际源码。
 
 ## 2026-11-14(续:cmd+tab 冻屏终局)
+- **有副作用的原生操作必须探测驱动**:app 级 hide/unhide 无脑跑=用更糟的病(卡隐藏态)换旧病;unhide 与激活过渡竞态实测会把 app 永久藏起来。分级:免费 JS kick → 无副作用探针 → 确认才动窗口 → reload 兜底。
+- **Swift API 签名别猜**:`unhide(nil)` 带参、`activate()` 无参且 macOS 14+(部署 12.0 要 `#available`);`swiftc -typecheck` 单文件 2 秒出权威答案。
+- **script(1) 包 pty 抓 Flutter stdout**:nohup 重定向后 stdout 全缓冲,日志憋几 KB 不出来;`script -q log command` 行缓冲,实时可读(注意 CR,`tr -d '\r'` 再 grep)。
 - **唤醒强度分级(实测)**:窗口级 orderOut < app 级 `NSApp.hide/unhide`——手动验证有效的是 app 级,降级实现成窗口级就不够(用户实测打回)。
 - **合成层死锁的可靠判据**=「WS 帧在涌 + 屏幕像素哈希 1.5s 不变」(原生 `CGWindowListCreateImage` 采本窗口);idle 屏 damage-only 无帧,天然免疫误判。命中即自动 reload 兜底。
 
