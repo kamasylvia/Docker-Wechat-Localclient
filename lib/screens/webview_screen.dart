@@ -119,7 +119,11 @@ class _WebViewScreenState extends State<WebViewScreen>
         _setDecoderActive(true);
       }
       // 画布冻结自愈:Kick 视频管线,再推剪贴板图片。
-      _kickStreamAwake();
+      // ⚠️ 2026-11-15 定案:恢复链 kick 全禁。二分实锤(NO_INJECT+无 kick
+      // 4/4 活;NO_INJECT+kick 轮2+ 全冻)——本客户端任何 resume 期的页内
+      // 干预(synthetic visibilitychange / Document.prototype.hidden 覆写 /
+      // START_VIDEO 补发)都会破坏页面自身的遮挡恢复,属自己造的回归
+      // (v5.6.10 引入)。页面不被打扰时能自愈,什么都不做即最优。
       // 用户从其它应用复制图片后切回客户端：自动把图片推到远端。
       _autoPushClipboardImage();
       return;

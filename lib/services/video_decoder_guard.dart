@@ -33,12 +33,12 @@ String videoDecoderVisibilityGuardScript() => r'''
 
   // document.hidden 覆盖最小化/切后台；rAF 停止覆盖窗口被遮挡但页面仍报
   // visible 的情况。两者任一成立都视为后台。
+  // ⚠️ 2026-11-15 定案(二分实锤):rAF/hidden 判据在窗口遮挡场景会把
+  // decode 永久早退(页面无 x264 重建路径)→ 冻屏。decode 门控只认 Dart
+  // 显式挂起(app 真后台 ≥30s);遮挡期间 decode 照跑,内存由 30s 路径兜底。
   function isBackground(){
     if (forcedBackground) return true;
-    try {
-      if (document.hidden || document.visibilityState === 'hidden') return true;
-    } catch(e) {}
-    return Date.now() - lastRaf > 1500;
+    return false;
   }
 
   function closeAll(){
@@ -97,9 +97,8 @@ String videoDecoderVisibilityGuardScript() => r'''
     var h = isBackground();
     if (h === hidden) return;
     hidden = h;
-    // 进入后台：释放 VT/CoreMedia 资源；回到前台：重置隐藏期间重建的实例，
-    // 让页面从下一个 keyframe 重新配置。
-    closeAll();
+    // ⚠️ 状态迁移不 closeAll:关闭后页面无法重建解码器(x264 无 rt() 路径),
+    // 切回即冻屏。深度释放仅由 Dart 30s 挂起路径(setActive)执行。
   }
 
   setInterval(update, 500);
